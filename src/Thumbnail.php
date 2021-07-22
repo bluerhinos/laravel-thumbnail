@@ -3,6 +3,7 @@
 namespace Rolandstarke\Thumbnail;
 
 use Exception;
+use Illuminate\Http\Request;
 use Illuminate\Contracts\Filesystem\FileNotFoundException;
 use Illuminate\Support\Arr;
 use Illuminate\Support\Facades\Storage;
@@ -18,6 +19,8 @@ class Thumbnail
     protected $source;
 
     protected $renderedImage;
+
+    protected $renderedImageLastModified;
 
     protected $config;
 
@@ -120,9 +123,32 @@ class Thumbnail
             ->url($outputPath . '?' . http_build_query($this->getUrlParams()));
     }
 
-    public function response(bool $useExisting = true): \Symfony\Component\HttpFoundation\Response
+    public function response(bool $useExisting = true, ?Request $request = null): \Symfony\Component\HttpFoundation\Response
     {
-        return response($this->getRenderedImage($useExisting), 200, ['content-type' => $this->getContentType()]);
+
+        $this->getRenderedImage($useExisting);
+        $response_headers = ['content-type' => $this->getContentType()];
+        $cache = $this->config['presets'][$this->preset]['cache'] ?? false;
+
+        if ($cache) {
+            $response_headers['cache-control'] = $cache['type'];
+            if(isset($cache['max_age'])) {
+                $response_headers['cache-control'] .=  sprintf(', max-age=%d', $cache['max_age']);
+                $response_headers['expires'] = gmdate('D, d M Y H:i:s T', time() +$cache['max_age']);
+
+            }
+            $response_headers['last-modified'] = gmdate('D, d M Y H:i:s T', $this->renderedImageLastModified);
+            $response_headers['etag'] = md5($this->renderedImage);
+
+            if (
+//                ($request->hasHeader('If-Modified-Since') === true && strtotime( $request->header('If-Modified-Since')) === $this->renderedImageLastModified)
+            ($request->hasHeader('If-None-Match')=== true && $request->header('If-None-Match') === $response_headers['etag'])
+            ) {
+                return response(null, 304);
+            }
+        }
+
+        return response($this->renderedImage, 200, $response_headers);
     }
 
     public function string(bool $useExisting = true): string
@@ -193,6 +219,7 @@ class Thumbnail
 
                 try {
                     $this->renderedImage = Storage::disk($destination['disk'])->get($outputPath);
+                    $this->renderedImageLastModified = Storage::disk($destination['disk'])->lastModified($outputPath);
                 } catch (Exception $exception) {
                     $this->renderedImage = null;
                 }
@@ -229,6 +256,7 @@ class Thumbnail
             }
         }
 
+        $this->renderedImageLastModified = time();
         $this->renderedImage = (string)$image->encode($this->getFormat(), Arr::get($params, 'quality'));
         return $this;
     }
