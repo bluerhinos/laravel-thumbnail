@@ -20,7 +20,7 @@ class ImageController extends Controller
         } catch (\Exception $err) {
             return response('Invalid Request', 400);
         }
-        
-        return $thumbnail->save()->response();
+
+        return $thumbnail->response(true, $request);
     }
 }
